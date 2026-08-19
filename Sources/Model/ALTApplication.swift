@@ -270,25 +270,39 @@ private extension ALTApplication {
 
     func loadExtensions() -> Set<ALTApplication> {
 
-        guard let pluginsURL = bundle.builtInPlugInsURL else {
-            return []
+        var extensionDirectories: [URL] = []
+
+        // Traditional app extensions are embedded in PlugIns/.
+        if let pluginsURL = bundle.builtInPlugInsURL {
+            extensionDirectories.append(pluginsURL)
+        }
+
+        // ExtensionKit extensions are embedded in Extensions/. Bundle does not
+        // expose a dedicated URL for this directory, so resolve it explicitly.
+        let extensionKitURL = bundle.bundleURL
+            .appendingPathComponent("Extensions", isDirectory: true)
+
+        if FileManager.default.fileExists(atPath: extensionKitURL.path) {
+            extensionDirectories.append(extensionKitURL)
         }
 
         var result = Set<ALTApplication>()
 
-        let enumerator = FileManager.default.enumerator(
-            at: pluginsURL,
-            includingPropertiesForKeys: nil,
-            options: [.skipsSubdirectoryDescendants]
-        )
+        for directoryURL in extensionDirectories {
+            let enumerator = FileManager.default.enumerator(
+                at: directoryURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants]
+            )
 
-        while let url = enumerator?.nextObject() as? URL {
-            guard url.pathExtension.lowercased() == "appex" else {
-                continue
-            }
+            while let url = enumerator?.nextObject() as? URL {
+                guard url.pathExtension.lowercased() == "appex" else {
+                    continue
+                }
 
-            if let ext = ALTApplication(fileURL: url) {
-                result.insert(ext)
+                if let ext = ALTApplication(fileURL: url) {
+                    result.insert(ext)
+                }
             }
         }
 
