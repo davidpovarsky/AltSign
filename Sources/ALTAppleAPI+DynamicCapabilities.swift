@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import SwiftBridge
 
 public extension ALTAppleAPI {
     /// Enables the modern Developer Portal capability whose provisioning-profile
