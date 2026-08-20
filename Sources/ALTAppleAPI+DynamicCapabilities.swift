@@ -188,6 +188,75 @@ public extension ALTAppleAPI {
         debugLog("[AltSign] Enabled dynamic capability \(capabilityID) for \(bundleIdentifier), preserving \(enabledCapabilityIDs.count - 1) existing capabilities.")
         return capabilityID
     }
+
+    /// Performs read-only capability probes with the authenticated Xcode session
+    /// and returns a redaction-safe JSON report. No App IDs, capabilities, or
+    /// provisioning profiles are created or modified.
+    func capabilitiesDiagnosticJSON(
+        team: ALTTeam,
+        session apiSession: ALTAppleAPISession
+    ) async -> String {
+        let targetEntitlement = "com.apple.developer.translation-app"
+        let fullBody: [String: Any] = [
+            "teamId": team.identifier,
+            "urlEncodedQueryParams": "filter[platform]=IOS,MACOS"
+        ]
+        let minimalBody: [String: Any] = [
+            "teamId": team.identifier,
+            "urlEncodedQueryParams": "filter[platform]=IOS"
+        ]
+
+        let probes = await [
+            self.capabilitiesDiagnosticProbe(
+                name: "xcode-services-full",
+                urlString: "https://developerservices2.apple.com/services/v1/capabilities?filter%5BcapabilityType%5D=capability%2Cservice",
+                body: fullBody,
+                targetEntitlement: targetEntitlement,
+                session: apiSession
+            ),
+            self.capabilitiesDiagnosticProbe(
+                name: "xcode-services-current-minimal",
+                urlString: "https://developerservices2.apple.com/services/v1/capabilities",
+                body: minimalBody,
+                targetEntitlement: targetEntitlement,
+                session: apiSession
+            ),
+            self.capabilitiesDiagnosticProbe(
+                name: "developer-portal-full",
+                urlString: "https://developer.apple.com/services-account/v1/capabilities?filter%5BcapabilityType%5D=capability%2Cservice",
+                body: fullBody,
+                targetEntitlement: targetEntitlement,
+                session: apiSession
+            )
+        ]
+
+        let found = probes.contains { probe in
+            (probe["translationMatchCount"] as? Int ?? 0) > 0
+        }
+
+        let report: [String: Any] = [
+            "generatedAt": ISO8601DateFormatter().string(from: Date()),
+            "readOnly": true,
+            "secretsIncluded": false,
+            "team": [
+                "identifier": team.identifier,
+                "name": team.name
+            ],
+            "target": [
+                "capabilityName": "Default Translation App",
+                "entitlement": targetEntitlement
+            ],
+            "translationAdvertisedByAnyProbe": found,
+            "probes": probes
+        ]
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            return String(data: data, encoding: .utf8) ?? "{\"error\":\"Could not encode capability diagnostic report as UTF-8.\"}"
+        } catch {
+            return "{\"error\":\"Could not encode capability diagnostic report: \(error.localizedDescription)\"}"
+        }
+    }
 }
 
 private extension ALTAppleAPI {
@@ -277,6 +346,140 @@ private extension ALTAppleAPI {
 
                 continuation.resume(returning: dictionary)
             }.resume()
+        }
+    }
+
+    func capabilitiesDiagnosticProbe(
+        name: String,
+        urlString: String,
+        body: [String: Any],
+        targetEntitlement: String,
+        session apiSession: ALTAppleAPISession
+    ) async -> [String: Any] {
+        guard let url = URL(string: urlString) else {
+            return [
+                "name": name,
+                "url": urlString,
+                "error": "Invalid diagnostic URL.",
+                "capabilityCount": 0,
+                "translationMatchCount": 0,
+                "translationMatches": []
+            ]
+        }
+
+        let bodyData: Data
+        do {
+            bodyData = try JSONSerialization.data(withJSONObject: body, options: [])
+        } catch {
+            return [
+                "name": name,
+                "url": urlString,
+                "error": "Could not encode request body: \(error.localizedDescription)",
+                "capabilityCount": 0,
+                "translationMatchCount": 0,
+                "translationMatches": []
+            ]
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = bodyData
+        request.setValue("application/vnd.api+json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
+        request.setValue("en-US,en;q=0.5", forHTTPHeaderField: "Accept-Language")
+        request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        request.setValue("GET", forHTTPHeaderField: "X-HTTP-Method-Override")
+        request.setValue("Xcode", forHTTPHeaderField: "User-Agent")
+        request.setValue("com.apple.gs.xcode.auth", forHTTPHeaderField: "X-Apple-App-Info")
+        request.setValue(apiSession.xcodeVersion, forHTTPHeaderField: "X-Xcode-Version")
+        request.setValue(apiSession.dsid, forHTTPHeaderField: "X-Apple-I-Identity-Id")
+        request.setValue(apiSession.authToken, forHTTPHeaderField: "X-Apple-GS-Token")
+
+        let anisette = apiSession.anisetteData
+        request.setValue(anisette.machineID, forHTTPHeaderField: "X-Apple-I-MD-M")
+        request.setValue(anisette.oneTimePassword, forHTTPHeaderField: "X-Apple-I-MD")
+        request.setValue(anisette.localUserID, forHTTPHeaderField: "X-Apple-I-MD-LU")
+        request.setValue("\(anisette.routingInfo)", forHTTPHeaderField: "X-Apple-I-MD-RINFO")
+        request.setValue(anisette.deviceUniqueIdentifier, forHTTPHeaderField: "X-Mme-Device-Id")
+        request.setValue(anisette.deviceDescription, forHTTPHeaderField: "X-MMe-Client-Info")
+        request.setValue(self.dateFormatter.string(from: anisette.date), forHTTPHeaderField: "X-Apple-I-Client-Time")
+        request.setValue(anisette.locale.identifier, forHTTPHeaderField: "X-Apple-Locale")
+        request.setValue(anisette.timeZone.abbreviation(for: anisette.date) ?? "", forHTTPHeaderField: "X-Apple-I-TimeZone")
+
+        verboseLog("[AltSign] Capability diagnostic probe \(name) -> \(url.absoluteString)")
+
+        return await withCheckedContinuation { continuation in
+            self.session.dataTask(with: request) { data, response, error in
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                var result: [String: Any] = [
+                    "name": name,
+                    "url": urlString,
+                    "httpStatus": statusCode,
+                    "request": [
+                        "method": "POST",
+                        "methodOverride": "GET",
+                        "teamId": body["teamId"] as? String ?? "",
+                        "urlEncodedQueryParams": body["urlEncodedQueryParams"] as? String ?? ""
+                    ]
+                ]
+
+                if let error {
+                    result["networkError"] = error.localizedDescription
+                }
+
+                guard let data, !data.isEmpty else {
+                    result["response"] = NSNull()
+                    result["capabilityCount"] = 0
+                    result["translationMatchCount"] = 0
+                    result["translationMatches"] = []
+                    continuation.resume(returning: result)
+                    return
+                }
+
+                if let object = try? JSONSerialization.jsonObject(with: data),
+                   let dictionary = object as? [String: Any] {
+                    result["response"] = dictionary
+                    let capabilities = dictionary["data"] as? [[String: Any]] ?? []
+                    let matches = capabilities.filter { item in
+                        self.isTranslationCapability(item, targetEntitlement: targetEntitlement)
+                    }
+                    result["capabilityCount"] = capabilities.count
+                    result["translationMatchCount"] = matches.count
+                    result["translationMatches"] = matches
+                    result["capabilityNames"] = capabilities.compactMap { item in
+                        (item["attributes"] as? [String: Any])?["name"] as? String
+                    }.sorted()
+                } else {
+                    result["responseText"] = String(data: data, encoding: .utf8) ?? "<binary response: \(data.count) bytes>"
+                    result["capabilityCount"] = 0
+                    result["translationMatchCount"] = 0
+                    result["translationMatches"] = []
+                }
+
+                continuation.resume(returning: result)
+            }.resume()
+        }
+    }
+
+    func isTranslationCapability(
+        _ item: [String: Any],
+        targetEntitlement: String
+    ) -> Bool {
+        guard let attributes = item["attributes"] as? [String: Any] else {
+            return false
+        }
+
+        if let name = attributes["name"] as? String {
+            let normalized = name.lowercased()
+            if normalized.contains("default translation") || normalized == "translation" || normalized.contains("translation app") {
+                return true
+            }
+        }
+
+        let entitlements = attributes["entitlements"] as? [[String: Any]] ?? []
+        return entitlements.contains { entitlement in
+            (entitlement["profileKey"] as? String) == targetEntitlement ||
+            (entitlement["key"] as? String) == targetEntitlement
         }
     }
 
