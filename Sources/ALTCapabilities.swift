@@ -38,6 +38,7 @@ extension ALTEntitlement {
     public static let interAppAudio: ALTEntitlement = "inter-app-audio"
     public static let increasedDebuggingMemoryLimit: ALTEntitlement = "com.apple.developer.kernel.increased-debugging-memory-limit"
     public static let extendedVirtualAddressing: ALTEntitlement = "com.apple.developer.kernel.extended-virtual-addressing"
+    public static let translationApp: ALTEntitlement = "com.apple.developer.translation-app"
 }
 
 public typealias ALTCapability = String
@@ -54,6 +55,7 @@ public let ALTEntitlementTeamIdentifier: ALTEntitlement = "com.apple.developer.t
 public let ALTEntitlementInterAppAudio: ALTEntitlement = "inter-app-audio"
 public let ALTEntitlementIncreasedDebuggingMemoryLimit: ALTEntitlement = "com.apple.developer.kernel.increased-debugging-memory-limit"
 public let ALTEntitlementExtendedVirtualAddressing: ALTEntitlement = "com.apple.developer.kernel.extended-virtual-addressing"
+public let ALTEntitlementTranslationApp: ALTEntitlement = "com.apple.developer.translation-app"
 
 // MARK: Capabilities
 
@@ -101,7 +103,8 @@ public func ALTFreeDeveloperCanUseEntitlement(_ entitlement: ALTEntitlement) -> 
          ALTEntitlementIncreasedMemoryLimit,
          ALTEntitlementTeamIdentifier,
          ALTEntitlementKeychainAccessGroups,
-         ALTEntitlementApplicationIdentifier:
+         ALTEntitlementApplicationIdentifier,
+         ALTEntitlementTranslationApp:
          return true
 
     default:
